@@ -37,7 +37,7 @@ if [[ $UPDATE == 0 ]]; then
 else
  say "نصب قبلی پیدا شد؛ دیتابیس و کلیدهای WireGuard حفظ می‌شوند."
  ENDPOINT="$(sed -n 's/^X7_ENDPOINT=//p' "$ENV" | tail -1)"
- WG_PORT="51821"
+ WG_PORT="20820"
  DOMAIN="$(sed -n 's/^X7_DOMAIN=//p' "$ENV" | tail -1)"
  PATH_SECRET="$(sed -n 's/^X7_PATH_SECRET=//p' "$ENV" | tail -1)"
  read -r -p "Panel domain [${DOMAIN:-none}]: " NEW_DOMAIN; DOMAIN="${NEW_DOMAIN:-$DOMAIN}"
@@ -88,6 +88,17 @@ PYMIGRATE
     die "Found wg0.conf but it does not match the previous X7 config. Refusing to touch it."
   fi
 fi
+# Apply X7-only WireGuard defaults on install/update. Never modify wg0 (Hunter DNS).
+if [[ -f /etc/wireguard/x7wg0.conf ]]; then
+  cp -a /etc/wireguard/x7wg0.conf "/etc/wireguard/x7wg0.conf.bak.$(date +%Y%m%d%H%M%S)"
+  sed -i 's/^ListenPort *= *.*/ListenPort = 20820/' /etc/wireguard/x7wg0.conf
+  if grep -q '^MTU *=' /etc/wireguard/x7wg0.conf; then
+    sed -i 's/^MTU *= *.*/MTU = 1280/' /etc/wireguard/x7wg0.conf
+  else
+    sed -i '/^Address *=/a MTU = 1280' /etc/wireguard/x7wg0.conf
+  fi
+fi
+
 say "Downloading latest X7 application"
 for f in main.py index.html __init__.py requirements.txt; do curl -fLsS "$BASE/app/$f" -o "$APP/$f"; done
 python3 -m venv "$APP/venv"
@@ -98,6 +109,7 @@ if [[ $UPDATE == 0 ]]; then
  cat >/etc/wireguard/x7wg0.conf <<EOF
 [Interface]
 Address = 10.78.0.1/24
+MTU = 1280
 ListenPort = $WG_PORT
 PrivateKey = $PRIV
 PostUp = iptables -A FORWARD -i %i -j ACCEPT; iptables -A FORWARD -o %i -j ACCEPT; iptables -t nat -A POSTROUTING -o $WAN -j MASQUERADE
@@ -123,12 +135,15 @@ PY
 fi
 unset ADMIN_PASS PASS2
 TMP="$(mktemp)"
-if [[ $UPDATE == 1 ]]; then grep -v -E '^X7_(ADMIN_USER|ADMIN_PASSWORD_HASH|DOMAIN|PATH_SECRET|PANEL_PORT)=' "$ENV" >"$TMP" || true; fi
+if [[ $UPDATE == 1 ]]; then grep -v '^X7_' "$ENV" >"$TMP" || true; fi
 {
  echo "X7_DB=$DB/panel.db"
  echo "X7_INTERFACE=x7wg0"
  echo "X7_WG_PORT=$WG_PORT"
  echo "X7_ENDPOINT=$ENDPOINT"
+ echo "X7_DNS=1.1.1.1"
+ echo "X7_MTU=1280"
+ echo "X7_CLIENT_ALLOWED_IPS=0.0.0.0/0"
  echo "X7_SERVER_ADDRESS=10.78.0.1/24"
  echo "X7_MODE=standalone"
  echo "X7_PANEL_PORT=$PANEL_PORT"
@@ -251,7 +266,7 @@ PY
 fi
 unset ADMIN_PASS PASS2
 TMP="$(mktemp)"
-if [[ $UPDATE == 1 ]]; then grep -v -E '^X7_(ADMIN_USER|ADMIN_PASSWORD_HASH|DOMAIN|PATH_SECRET|PANEL_PORT)=' "$ENV" >"$TMP" || true; fi
+if [[ $UPDATE == 1 ]]; then grep -v '^X7_' "$ENV" >"$TMP" || true; fi
 {
  echo "X7_DB=$DB/panel.db"
  echo "X7_INTERFACE=wg0"
@@ -400,7 +415,7 @@ PY
 fi
 unset ADMIN_PASS PASS2
 TMP="$(mktemp)"
-if [[ $UPDATE == 1 ]]; then grep -v -E '^X7_(ADMIN_USER|ADMIN_PASSWORD_HASH|DOMAIN|PATH_SECRET|PANEL_PORT)=' "$ENV" >"$TMP" || true; fi
+if [[ $UPDATE == 1 ]]; then grep -v '^X7_' "$ENV" >"$TMP" || true; fi
 {
  echo "X7_DB=$DB/panel.db"
  echo "X7_INTERFACE=wg0"
