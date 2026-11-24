@@ -1,59 +1,57 @@
 # X7 Panel
 
-Self-hosted WireGuard management panel for Ubuntu 24.04 LTS.
+پنل مدیریت WireGuard برای Ubuntu 24.04 LTS، با نصب یک‌فایلی و رابط فارسی.
 
-## Features
+## ویژگی‌ها
 
-- Persian RTL dashboard
-- Username/password administrator login (password stored as PBKDF2-HMAC-SHA256 hash)
-- Custom panel domain with Nginx reverse proxy and Let's Encrypt HTTPS
-- WireGuard peer create/delete, client config download and QR code
-- Live interface status and peer transfer counters
-- Interactive uninstaller
+- داشبورد فارسی با طراحی تیره، کارت‌های آماری و منوی کناری
+- ورود مدیر با نام کاربری و رمز عبور
+- ساخت کاربر با تخصیص خودکار IP و کلیدهای WireGuard
+- دریافت فایل کانفیگ و QR Code
+- حذف کاربر و نمایش وضعیت/مصرف ترافیک
+- دامنه دلخواه و HTTPS با Let's Encrypt
+- نصب مجدد به‌عنوان آپدیت، بدون پاک‌کردن کلید سرور یا دیتابیس کاربران
+- حذف پنل با امکان انتخاب نگهداری یا حذف WireGuard
 
-## Cloudflare DNS before installation
+## نصب تک‌دستوری
 
-1. Add an **A** record for the panel hostname (for example panel.example.com) pointing to the public IPv4 address of this VPS.
-2. For initial certificate issuance, set the record to **DNS only** (grey cloud).
-3. Allow inbound TCP 80 and 443, plus UDP 51820 (or your chosen WireGuard port) in the VPS provider firewall.
-4. The installer obtains a trusted Let's Encrypt certificate. After HTTPS works, you may enable Cloudflare proxy if desired and set Cloudflare SSL/TLS mode to **Full (strict)**.
-
-Cloudflare proxy status controls whether web traffic goes through Cloudflare or directly to the origin; DNS-only records resolve directly to the origin. See [Cloudflare proxy status documentation](https://developers.cloudflare.com/dns/proxy-status/). Certbot's Nginx integration configures TLS for the hostname; see [Ubuntu TLS certificate documentation](https://ubuntu.com/server/docs/how-to/security/obtain-tls-certificates/).
-
-## Fresh installation
+از هر مسیری روی VPS اجرا کن (دستور فایل را دانلود می‌کند و بعد اجرا می‌کند تا سؤال‌های ترمینال درست دریافت شوند):
 
 ```bash
-git clone https://github.com/AlisanX17/X7-Panel.git
-cd X7-Panel
-sudo bash install.sh
+curl -fsSLO https://raw.githubusercontent.com/AlisanX17/X7-Panel/main/install.sh && sudo bash install.sh
 ```
 
-Select standalone for one foreign VPS. The installer then asks for the WireGuard endpoint, panel domain, admin username, admin password, and certificate email. The password is not stored in plaintext.
+نصب‌کننده آدرس عمومی WireGuard، پورت UDP، دامنه پنل، نام کاربری و رمز را می‌پرسد. اگر دامنه را وارد کنی، می‌توانی Cloudflare API Token با دسترسی DNS محدود به همان Zone بدهی تا گواهی با DNS-01 گرفته شود؛ اگر توکن را خالی بگذاری، از HTTP-01 استفاده می‌شود و TCP پورت 80 باید از اینترنت قابل دسترسی باشد.
 
-Open the panel at https://your-panel-domain.
+### Cloudflare و SSL
 
-## Upgrade an existing installation
+- برای DNS-01، رکورد A باید به IP سرور اشاره کند و API Token با مجوز Zone DNS Edit در اختیار نصب‌کننده قرار می‌گیرد. توکن در فایل محافظت‌شده root ذخیره می‌شود.
+- برای HTTP-01، رکورد باید به IP عمومی همین VPS resolve شود و TCP پورت 80 از اینترنت باز باشد.
+- پنل فقط روی localhost پورت 8787 گوش می‌دهد و از طریق Nginx/HTTPS ارائه می‌شود؛ اگر SSL صادر نشود، نصب کامل نمی‌شود اما پنل روی شبکه عمومی HTTP باز نمی‌شود و می‌توان با SSH Tunnel وارد شد.
+- پس از صدور SSL، می‌توانی رکورد وب را در Cloudflare پروکسی کنی؛ برای حالت Proxied، SSL/TLS را روی Full (strict) بگذار.
+
+## آپدیت
+
+همان دستور نصب را دوباره اجرا کن. اگر نصب قبلی شناسایی شود، فایل‌های برنامه به‌روزرسانی می‌شوند و دیتابیس کاربران و کلید WireGuard حفظ می‌شوند. برای اجرای کوتاه‌تر:
 
 ```bash
-cd ~/X7-Panel
-git pull
-sudo bash update.sh
+curl -fsSLO https://raw.githubusercontent.com/AlisanX17/X7-Panel/main/update.sh && sudo bash update.sh
 ```
 
-The update script asks for the panel domain and new admin credentials, updates the app, configures Nginx, and requests/renews HTTPS. It does not reset WireGuard keys or delete the peer database.
-
-## Uninstall
+## بررسی وضعیت
 
 ```bash
-cd ~/X7-Panel
-sudo bash uninstall.sh
+sudo systemctl status x7-panel wg-quick@wg0 nginx --no-pager
 ```
 
-The uninstaller removes the panel app and Nginx site. It asks whether WireGuard configuration and saved peers should also be deleted. By default, WireGuard is preserved. Nginx, Certbot, and WireGuard packages are not removed because other services may use them.
+## حذف
 
-## Important limitations
+```bash
+curl -fsSLO https://raw.githubusercontent.com/AlisanX17/X7-Panel/main/uninstall.sh && sudo bash uninstall.sh
+```
 
-- The current standalone mode manages one WireGuard server. Automatic Iran-to-foreign two-node pairing and route orchestration are not implemented.
-- Test on a disposable VPS before production use. ISP filtering, routing, provider firewalls, and local network policies can affect connectivity.
-- Keep /etc/x7-panel.env, /etc/wireguard/wg0.conf, and /var/lib/x7-panel/ private. Never share administrator credentials or client private keys.
-- The panel listens only on 127.0.0.1:8787; Nginx exposes it through HTTPS.
+حذف‌کننده ابتدا پنل و سایت Nginx را پاک می‌کند و سپس می‌پرسد آیا WireGuard و دیتابیس کاربران نیز حذف شوند یا باقی بمانند. بسته‌های Nginx، Certbot و WireGuard برای جلوگیری از حذف وابستگی‌های احتمالی سرویس‌های دیگر، خودکار پاک نمی‌شوند.
+
+## محدودیت فعلی
+
+این نسخه حالت تک‌سرور خارج (standalone) را مدیریت می‌کند. جفت‌سازی خودکار سرور ایران و خارج هنوز پیاده‌سازی نشده است. اتصال VPN نیز به فایروال VPS، مسیر شبکه و محدودیت‌های ISP وابسته است و قابل تضمین برای همه شبکه‌ها نیست.
