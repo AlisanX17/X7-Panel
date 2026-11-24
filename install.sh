@@ -39,6 +39,7 @@ else
  ENDPOINT="$(sed -n 's/^X7_ENDPOINT=//p' "$ENV" | tail -1)"
  WG_PORT="$(sed -n 's/^X7_WG_PORT=//p' "$ENV" | tail -1)"
  DOMAIN="$(sed -n 's/^X7_DOMAIN=//p' "$ENV" | tail -1)"
+ PATH_SECRET="$(sed -n 's/^X7_PATH_SECRET=//p' "$ENV" | tail -1)"
  read -r -p "Panel domain [${DOMAIN:-none}]: " NEW_DOMAIN; DOMAIN="${NEW_DOMAIN:-$DOMAIN}"
  read -r -p "Admin username (Enter keeps current): " ADMIN_USER
  ADMIN_USER="${ADMIN_USER:-$(sed -n 's/^X7_ADMIN_USER=//p' "$ENV" | tail -1)}"
@@ -47,8 +48,11 @@ else
  if [[ -z "$ADMIN_PASS" ]]; then HASH="$(sed -n 's/^X7_ADMIN_PASSWORD_HASH=//p' "$ENV" | tail -1)"
  else [[ ${#ADMIN_PASS} -ge 12 ]] || die "Password must be 12+ chars."; fi
 fi
+PATH_SECRET="${PATH_SECRET:-$(openssl rand -hex 20)}"
+PANEL_PORT=9444
 CF_TOKEN=""; EMAIL=""
 if [[ -n "$DOMAIN" ]]; then
+ if ss -lnt 2>/dev/null | awk '{print $4}' | grep -Eq "(:|\\])${PANEL_PORT}$" && [[ ! -e /etc/nginx/sites-enabled/x7-panel-9444 ]]; then die "TCP port ${PANEL_PORT} is already in use."; fi
  [[ "$DOMAIN" =~ ^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,}$ ]] || die "Invalid panel domain."
  read -rsp "Cloudflare API Token for DNS-01 SSL (Enter = HTTP-01): " CF_TOKEN; echo
  read -r -p "Let's Encrypt email [admin@$DOMAIN]: " EMAIL; EMAIL="${EMAIL:-admin@$DOMAIN}"
@@ -94,7 +98,7 @@ PY
 fi
 unset ADMIN_PASS PASS2
 TMP="$(mktemp)"
-if [[ $UPDATE == 1 ]]; then grep -v -E '^X7_(ADMIN_USER|ADMIN_PASSWORD_HASH|DOMAIN)=' "$ENV" >"$TMP" || true; fi
+if [[ $UPDATE == 1 ]]; then grep -v -E '^X7_(ADMIN_USER|ADMIN_PASSWORD_HASH|DOMAIN|PATH_SECRET|PANEL_PORT)=' "$ENV" >"$TMP" || true; fi
 {
  echo "X7_DB=$DB/panel.db"
  echo "X7_INTERFACE=wg0"
@@ -102,6 +106,8 @@ if [[ $UPDATE == 1 ]]; then grep -v -E '^X7_(ADMIN_USER|ADMIN_PASSWORD_HASH|DOMA
  echo "X7_ENDPOINT=$ENDPOINT"
  echo "X7_SERVER_ADDRESS=10.77.0.1/24"
  echo "X7_MODE=standalone"
+ echo "X7_PANEL_PORT=$PANEL_PORT"
+ echo "X7_PATH_SECRET=$PATH_SECRET"
  echo "X7_ADMIN_USER=$ADMIN_USER"
  echo "X7_ADMIN_PASSWORD_HASH=$HASH"
  [[ -n "$DOMAIN" ]] && echo "X7_DOMAIN=$DOMAIN" || true
@@ -134,54 +140,49 @@ systemctl enable --now x7-panel
 systemctl restart x7-panel
 TLS=0
 if [[ -n "$DOMAIN" ]]; then
- if ! getent ahostsv4 "$DOMAIN" >/dev/null; then echo "[X7] DNS does not resolve yet."; 
+ if ! getent ahostsv4 "$DOMAIN" >/dev/null; then
+  echo "[X7] DNS does not resolve yet."
  elif [[ -n "$CF_TOKEN" ]] && dpkg -s python3-certbot-dns-cloudflare >/dev/null 2>&1; then
   install -d -m 700 /etc/letsencrypt
-  printf 'dns_cloudflare_api_token = %s\n' "$CF_TOKEN" >/etc/letsencrypt/cloudflare-x7.ini; chmod 600 /etc/letsencrypt/cloudflare-x7.ini
+  printf 'dns_cloudflare_api_token = %s\\n' "$CF_TOKEN" >/etc/letsencrypt/cloudflare-x7.ini
+  chmod 600 /etc/letsencrypt/cloudflare-x7.ini
   certbot certonly --non-interactive --agree-tos --email "$EMAIL" --dns-cloudflare --dns-cloudflare-credentials /etc/letsencrypt/cloudflare-x7.ini -d "$DOMAIN" && TLS=1 || true
  else
-  cat >/etc/nginx/sites-available/x7-panel <<EOF
-server { listen 80; server_name $DOMAIN; location / { proxy_pass http://127.0.0.1:8787; proxy_set_header Host \$host; } }
-EOF
-  ln -sfn /etc/nginx/sites-available/x7-panel /etc/nginx/sites-enabled/x7-panel
-  rm -f /etc/nginx/sites-enabled/default
-  nginx -t && systemctl enable --now nginx
-  certbot --nginx -d "$DOMAIN" --non-interactive --agree-tos -m "$EMAIL" --redirect && TLS=1 || true
+  certbot certonly --webroot -w /var/www/html --non-interactive --agree-tos --email "$EMAIL" -d "$DOMAIN" && TLS=1 || true
  fi
  if [[ $TLS == 1 ]]; then
-  cat >/etc/nginx/sites-available/x7-panel <<EOF
-server { listen 80; server_name $DOMAIN; location / { return 301 https://\$host\$request_uri; } }
+  cat >/etc/nginx/sites-available/x7-panel-9444 <<EOF
 server {
- listen 443 ssl; server_name $DOMAIN;
+ listen ${PANEL_PORT} ssl;
+ server_name $DOMAIN;
  ssl_certificate /etc/letsencrypt/live/$DOMAIN/fullchain.pem;
  ssl_certificate_key /etc/letsencrypt/live/$DOMAIN/privkey.pem;
  ssl_protocols TLSv1.2 TLSv1.3;
  add_header X-Frame-Options DENY always;
  add_header X-Content-Type-Options nosniff always;
- location / {
-  proxy_pass http://127.0.0.1:8787;
-  proxy_set_header Host \$host;
-  proxy_set_header X-Real-IP \$remote_addr;
-  proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+ location = /$PATH_SECRET { return 301 /$PATH_SECRET/; }
+ location ^~ /$PATH_SECRET/ {
+  proxy_pass http://127.0.0.1:8787/;
+  proxy_set_header Host \\$host;
+  proxy_set_header X-Real-IP \\$remote_addr;
+  proxy_set_header X-Forwarded-For \\$proxy_add_x_forwarded_for;
   proxy_set_header X-Forwarded-Proto https;
  }
+ location / { return 404; }
 }
 EOF
-  ln -sfn /etc/nginx/sites-available/x7-panel /etc/nginx/sites-enabled/x7-panel
-  rm -f /etc/nginx/sites-enabled/default
-  nginx -t && systemctl reload nginx
+  ln -sfn /etc/nginx/sites-available/x7-panel-9444 /etc/nginx/sites-enabled/x7-panel-9444
+  nginx -t && systemctl enable --now nginx && systemctl reload nginx
  else
-  rm -f /etc/nginx/sites-enabled/x7-panel /etc/nginx/sites-available/x7-panel
-  nginx -t && systemctl reload nginx || true
-  echo "[X7] SSL not issued. Panel remains private on localhost; correct DNS/port 80 or use a Cloudflare API token and rerun."
+  echo "[X7] SSL not issued. X7 remains SSH-only; check DNS/HTTP-01 reachability or Cloudflare token, then rerun installer."
  fi
 fi
 unset CF_TOKEN
 say "X7 Panel install/update finished."
-if [[ $TLS == 1 ]]; then echo "Panel: https://$DOMAIN"; else echo "Panel: SSH-only at 127.0.0.1:8787"; echo "SSH: ssh -L 8787:127.0.0.1:8787 root@YOUR_SERVER_IP"; fi
+if [[ $TLS == 1 ]]; then echo "Panel: https://$DOMAIN:$PANEL_PORT/$PATH_SECRET/"; else echo "Panel: SSH-only at 127.0.0.1:8787"; echo "SSH: ssh -L 8787:127.0.0.1:8787 root@YOUR_SERVER_IP"; fi
 echo "Admin username: $ADMIN_USER"
 echo "WireGuard endpoint: $ENDPOINT:$WG_PORT"
 echo "WireGuard public key: ${PUB:-$(wg show wg0 public-key 2>/dev/null || true)}"
 echo "Update: curl -fsSL $BASE/install.sh | sudo bash"
 echo "Remove: curl -fsSL $BASE/uninstall.sh | sudo bash"
-echo "Open TCP 80/443 and UDP $WG_PORT at your VPS firewall."
+echo "Open TCP $PANEL_PORT and UDP $WG_PORT at your VPS firewall. (TCP 80 is only needed for HTTP-01 certificate issuance.)"
