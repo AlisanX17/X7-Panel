@@ -118,7 +118,26 @@ class LoginInput(BaseModel):
 
 class PeerCreate(BaseModel):
     name: str = Field(min_length=2, max_length=32, pattern=r"^[A-Za-z0-9_-]+$")
-    address: str
+    address: Optional[str] = None
+
+
+def allocate_peer_address(conn):
+    raw = os.getenv("X7_SERVER_ADDRESS", "10.77.0.1/24")
+    try:
+        server_iface = ipaddress.ip_interface(raw)
+        network = server_iface.network
+    except ValueError:
+        network = ipaddress.ip_network("10.77.0.0/24")
+        server_iface = ipaddress.ip_interface("10.77.0.1/24")
+    used = {str(server_iface.ip)}
+    used.update(r[0].split("/")[0] for r in conn.execute("SELECT address FROM peers"))
+    # Keep automatic allocation in the first 4096 host addresses.
+    for candidate in network.hosts():
+        if str(candidate) not in used:
+            return ipaddress.ip_interface(f"{candidate}/32")
+        if int(candidate) - int(network.network_address) > 4096:
+            break
+    raise HTTPException(409, "ظرفیت آدرس‌های این شبکه تمام شده است")
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -177,15 +196,19 @@ def build_client_config(private_key: str, address: str):
 def create_peer(peer: PeerCreate, authorization: Optional[str] = Header(default=None)):
     require_auth(authorization)
     ensure_ready()
-    try:
-        iface = ipaddress.ip_interface(peer.address)
-        if iface.version != 4 or iface.network.prefixlen != 32:
-            raise ValueError()
-    except ValueError:
-        raise HTTPException(400, "آدرس باید IPv4 با پسوند /32 باشد؛ مثل 10.77.0.2/32")
     if not SERVER_ENDPOINT:
         raise HTTPException(409, "آدرس عمومی سرور تنظیم نشده است")
     conn = db()
+    try:
+        if peer.address:
+            iface = ipaddress.ip_interface(peer.address)
+            if iface.version != 4 or iface.network.prefixlen != 32:
+                raise ValueError()
+        else:
+            iface = allocate_peer_address(conn)
+    except ValueError:
+        conn.close()
+        raise HTTPException(400, "آدرس باید IPv4 با پسوند /32 باشد")
     if conn.execute("SELECT 1 FROM peers WHERE name=? OR address=?",
                     (peer.name, str(iface))).fetchone():
         conn.close()
