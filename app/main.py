@@ -19,9 +19,10 @@ DB_PATH = Path(os.getenv("X7_DB", "/var/lib/x7-panel/panel.db"))
 ADMIN_USER = os.getenv("X7_ADMIN_USER", "")
 PASSWORD_HASH = os.getenv("X7_ADMIN_PASSWORD_HASH", "")
 IFACE = os.getenv("X7_INTERFACE", "x7wg0")
-PORT = int(os.getenv("X7_WG_PORT", "51821"))
+PORT = int(os.getenv("X7_WG_PORT", "20820"))
 SERVER_ENDPOINT = os.getenv("X7_ENDPOINT", "")
 DNS = os.getenv("X7_DNS", "1.1.1.1")
+MTU = int(os.getenv("X7_MTU", "1280"))
 MODE = os.getenv("X7_MODE", "standalone")
 CLIENT_ALLOWED_IPS = os.getenv("X7_CLIENT_ALLOWED_IPS", "0.0.0.0/0")
 CONF = Path("/etc/wireguard") / f"{IFACE}.conf"
@@ -186,7 +187,8 @@ def build_client_config(private_key: str, address: str):
     if not SERVER_ENDPOINT:
         raise HTTPException(409, "آدرس عمومی سرور تنظیم نشده است")
     return ("[Interface]\n" f"PrivateKey = {private_key}\n"
-            f"Address = {address}/32\n" f"DNS = {DNS}\n\n"
+            f"Address = {address}/32\n" f"DNS = {DNS}\n"
+            f"MTU = {MTU}\n\n"
             "[Peer]\n" f"PublicKey = {server_public_key()}\n"
             f"Endpoint = {SERVER_ENDPOINT}:{PORT}\n"
             f"AllowedIPs = {CLIENT_ALLOWED_IPS}\n" "PersistentKeepalive = 25\n")
