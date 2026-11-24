@@ -41,7 +41,7 @@ curl -fsSLO https://raw.githubusercontent.com/AlisanX17/X7-Panel/main/update.sh 
 ## بررسی وضعیت
 
 ```bash
-sudo systemctl status x7-panel wg-quick@wg0 nginx --no-pager
+sudo systemctl status x7-panel wg-quick@x7wg0 nginx --no-pager
 ```
 
 ## حذف
@@ -51,6 +51,11 @@ curl -fsSLO https://raw.githubusercontent.com/AlisanX17/X7-Panel/main/uninstall.
 ```
 
 حذف‌کننده ابتدا پنل و سایت Nginx را پاک می‌کند و سپس می‌پرسد آیا WireGuard و دیتابیس کاربران نیز حذف شوند یا باقی بمانند. بسته‌های Nginx، Certbot و WireGuard برای جلوگیری از حذف وابستگی‌های احتمالی سرویس‌های دیگر، خودکار پاک نمی‌شوند.
+
+## جداسازی از Hunter DNS
+
+- اینترفیس WireGuard پنل X7 با نام `x7wg0`، پورت UDP پیش‌فرض `51821` و شبکه `10.78.0.0/24` ساخته می‌شود تا با اینترفیس `wg0` سرویس‌های دیگر تداخل نداشته باشد.
+- آپدیت از نسخه‌های قدیمی، تنظیمات قبلی X7 را به اینترفیس جداگانه منتقل می‌کند و دیتابیس کاربران را نگه می‌دارد.
 
 ## محدودیت فعلی
 
