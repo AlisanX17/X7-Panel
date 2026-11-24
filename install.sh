@@ -11,7 +11,7 @@ case "${1:-}" in
  --version) echo "X7 Panel 0.5.0"; exit 0;;
  --help) echo "Run install/update: curl -fsSL $BASE/install.sh | sudo bash"; echo "Check: sudo bash install.sh --check"; echo "Uninstall: curl -fsSL $BASE/uninstall.sh | sudo bash"; exit 0;;
  --uninstall) curl -fsSL "$BASE/uninstall.sh" -o /tmp/x7-uninstall.sh; exec bash /tmp/x7-uninstall.sh;;
- --check) systemctl --no-pager status x7-panel wg-quick@x7wg0 nginx 2>&1 || true; ss -lntup | grep -E ':(80|443|8787|51821)\b' || true; exit 0;;
+ --check) systemctl --no-pager status x7-panel wg-quick@x7wg0 nginx 2>&1 || true; ss -lntup | grep -E ':(80|443|8787|20820)\b' || true; exit 0;;
 esac
 . /etc/os-release
 [[ "${ID:-}" == ubuntu && "${VERSION_ID:-}" == 24.04 ]] || die "Ubuntu 24.04 LTS required."
@@ -22,7 +22,7 @@ if [[ $UPDATE == 0 ]]; then
  read -r -p "WireGuard public IP/domain [$DEFAULT_IP]: " ENDPOINT
  ENDPOINT="${ENDPOINT:-$DEFAULT_IP}"
  [[ -n "$ENDPOINT" ]] || die "Public endpoint required."
- read -r -p "WireGuard UDP port [51821]: " WG_PORT; WG_PORT="${WG_PORT:-51821}"
+ read -r -p "WireGuard UDP port [20820]: " WG_PORT; WG_PORT="${WG_PORT:-20820}"
  [[ "$WG_PORT" =~ ^[0-9]{1,5}$ ]] && ((WG_PORT>0 && WG_PORT<65536)) || die "Invalid UDP port."
  read -r -p "Panel domain (Enter for SSH-only): " DOMAIN
  read -r -p "Admin username [admin]: " ADMIN_USER; ADMIN_USER="${ADMIN_USER:-admin}"
@@ -42,8 +42,10 @@ else
  PATH_SECRET="$(sed -n 's/^X7_PATH_SECRET=//p' "$ENV" | tail -1)"
  read -r -p "Panel domain [${DOMAIN:-none}]: " NEW_DOMAIN; DOMAIN="${NEW_DOMAIN:-$DOMAIN}"
  read -r -p "Admin username (Enter keeps current): " ADMIN_USER
- ADMIN_USER="${ADMIN_USER:-$(sed -n 's/^X7_ADMIN_USER=//p' "$ENV" | tail -1)}"
- [[ "$ADMIN_USER" =~ ^[A-Za-z0-9_.-]{3,32}$ ]] || die "Invalid username."
+ OLD_ADMIN_USER="$(sed -n 's/^X7_ADMIN_USER=//p' "$ENV" | tr -d '\\r' | tail -1)"
+ ADMIN_USER="${ADMIN_USER:-$OLD_ADMIN_USER}"
+ ADMIN_USER="${ADMIN_USER:-admin}"
+ [[ "$ADMIN_USER" =~ ^[A-Za-z0-9_.-]{3,32}$ ]] || die "Invalid username. Use 3-32 ASCII letters, digits, dot, underscore or hyphen."
  read -rsp "New admin password (Enter keeps current): " ADMIN_PASS; echo
  if [[ -z "$ADMIN_PASS" ]]; then HASH="$(sed -n 's/^X7_ADMIN_PASSWORD_HASH=//p' "$ENV" | tail -1)"
  else [[ ${#ADMIN_PASS} -ge 12 ]] || die "Password must be 12+ chars."; fi
@@ -88,8 +90,8 @@ PYMIGRATE
     die "Found wg0.conf but it does not match the previous X7 config. Refusing to touch it."
   fi
 fi
-# Apply X7-only WireGuard defaults on install/update. Never modify wg0 (Hunter DNS).
-if [[ -f /etc/wireguard/x7wg0.conf ]]; then
+# Update only X7's dedicated interface. Never edit wg0 (may belong to Hunter DNS).
+if [[ $UPDATE == 1 && -f /etc/wireguard/x7wg0.conf ]]; then
   cp -a /etc/wireguard/x7wg0.conf "/etc/wireguard/x7wg0.conf.bak.$(date +%Y%m%d%H%M%S)"
   sed -i 's/^ListenPort *= *.*/ListenPort = 20820/' /etc/wireguard/x7wg0.conf
   if grep -q '^MTU *=' /etc/wireguard/x7wg0.conf; then
@@ -109,7 +111,6 @@ if [[ $UPDATE == 0 ]]; then
  cat >/etc/wireguard/x7wg0.conf <<EOF
 [Interface]
 Address = 10.78.0.1/24
-MTU = 1280
 ListenPort = $WG_PORT
 PrivateKey = $PRIV
 PostUp = iptables -A FORWARD -i %i -j ACCEPT; iptables -A FORWARD -o %i -j ACCEPT; iptables -t nat -A POSTROUTING -o $WAN -j MASQUERADE
@@ -141,9 +142,6 @@ if [[ $UPDATE == 1 ]]; then grep -v '^X7_' "$ENV" >"$TMP" || true; fi
  echo "X7_INTERFACE=x7wg0"
  echo "X7_WG_PORT=$WG_PORT"
  echo "X7_ENDPOINT=$ENDPOINT"
- echo "X7_DNS=1.1.1.1"
- echo "X7_MTU=1280"
- echo "X7_CLIENT_ALLOWED_IPS=0.0.0.0/0"
  echo "X7_SERVER_ADDRESS=10.78.0.1/24"
  echo "X7_MODE=standalone"
  echo "X7_PANEL_PORT=$PANEL_PORT"
@@ -226,283 +224,6 @@ if [[ $TLS == 1 ]]; then echo "Panel: https://$DOMAIN:$PANEL_PORT/$PATH_SECRET/"
 echo "Admin username: $ADMIN_USER"
 echo "WireGuard endpoint: $ENDPOINT:$WG_PORT"
 echo "WireGuard public key: ${PUB:-$(wg show x7wg0 public-key 2>/dev/null || true)}"
-echo "Update: curl -fsSL $BASE/install.sh | sudo bash"
-echo "Remove: curl -fsSL $BASE/uninstall.sh | sudo bash"
-echo "Open TCP $PANEL_PORT and UDP $WG_PORT at your VPS firewall. (TCP 80 is only needed for HTTP-01 certificate issuance.)"
- "$ENV" 2>/dev/null; then
-  if grep -q '^Address *= *10\.77\.0\.1/24
-say "Downloading latest X7 application"
-for f in main.py index.html __init__.py requirements.txt; do curl -fLsS "$BASE/app/$f" -o "$APP/$f"; done
-python3 -m venv "$APP/venv"
-"$APP/venv/bin/pip" install --disable-pip-version-check -q -r "$APP/requirements.txt"
-if [[ $UPDATE == 0 ]]; then
- WAN="$(ip -4 route show default | awk 'NR==1{print $5}')"; [[ -n "$WAN" ]] || die "Cannot detect network interface."
- PRIV="$(wg genkey)"; PUB="$(printf '%s' "$PRIV" | wg pubkey)"
- cat >/etc/wireguard/wg0.conf <<EOF
-[Interface]
-Address = 10.77.0.1/24
-ListenPort = $WG_PORT
-PrivateKey = $PRIV
-PostUp = iptables -A FORWARD -i %i -j ACCEPT; iptables -A FORWARD -o %i -j ACCEPT; iptables -t nat -A POSTROUTING -o $WAN -j MASQUERADE
-PostDown = iptables -D FORWARD -i %i -j ACCEPT; iptables -D FORWARD -o %i -j ACCEPT; iptables -t nat -D POSTROUTING -o $WAN -j MASQUERADE
-EOF
- chmod 600 /etc/wireguard/wg0.conf
- HASH="$(ADMIN_PASS="$ADMIN_PASS" python3 - <<'PY'
-import hashlib,os,secrets
-s=secrets.token_bytes(16)
-print(s.hex()+"$"+hashlib.pbkdf2_hmac("sha256",os.environ["ADMIN_PASS"].encode(),s,310000).hex())
-PY
-)"
-else
- PUB="$(wg show wg0 public-key 2>/dev/null || true)"
- if [[ -n "$ADMIN_PASS" ]]; then
-  HASH="$(ADMIN_PASS="$ADMIN_PASS" python3 - <<'PY'
-import hashlib,os,secrets
-s=secrets.token_bytes(16)
-print(s.hex()+"$"+hashlib.pbkdf2_hmac("sha256",os.environ["ADMIN_PASS"].encode(),s,310000).hex())
-PY
-)"
- fi
-fi
-unset ADMIN_PASS PASS2
-TMP="$(mktemp)"
-if [[ $UPDATE == 1 ]]; then grep -v '^X7_' "$ENV" >"$TMP" || true; fi
-{
- echo "X7_DB=$DB/panel.db"
- echo "X7_INTERFACE=wg0"
- echo "X7_WG_PORT=$WG_PORT"
- echo "X7_ENDPOINT=$ENDPOINT"
- echo "X7_SERVER_ADDRESS=10.77.0.1/24"
- echo "X7_MODE=standalone"
- echo "X7_PANEL_PORT=$PANEL_PORT"
- echo "X7_PATH_SECRET=$PATH_SECRET"
- echo "X7_ADMIN_USER=$ADMIN_USER"
- echo "X7_ADMIN_PASSWORD_HASH=$HASH"
- [[ -n "$DOMAIN" ]] && echo "X7_DOMAIN=$DOMAIN" || true
-} >>"$TMP"
-install -m 600 "$TMP" "$ENV"; rm -f "$TMP"
-cat >/etc/systemd/system/x7-panel.service <<'EOF'
-[Unit]
-Description=X7 Panel
-After=network-online.target wg-quick@wg0.service
-Wants=network-online.target
-[Service]
-Type=simple
-User=root
-WorkingDirectory=/opt/x7-panel
-EnvironmentFile=/etc/x7-panel.env
-ExecStart=/opt/x7-panel/venv/bin/uvicorn main:app --app-dir /opt/x7-panel --host 127.0.0.1 --port 8787
-Restart=on-failure
-RestartSec=3
-NoNewPrivileges=true
-PrivateTmp=true
-ProtectHome=true
-ProtectSystem=full
-ReadWritePaths=/var/lib/x7-panel /etc/wireguard
-[Install]
-WantedBy=multi-user.target
-EOF
-systemctl daemon-reload
-systemctl enable --now wg-quick@wg0
-systemctl enable --now x7-panel
-systemctl restart x7-panel
-TLS=0
-if [[ -n "$DOMAIN" ]]; then
- if [[ -s "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" && -s "/etc/letsencrypt/live/$DOMAIN/privkey.pem" ]]; then
-  TLS=1
- elif ! getent ahostsv4 "$DOMAIN" >/dev/null; then
-  echo "[X7] DNS does not resolve yet."
- elif [[ -n "$CF_TOKEN" ]] && dpkg -s python3-certbot-dns-cloudflare >/dev/null 2>&1; then
-  install -d -m 700 /etc/letsencrypt
-  printf 'dns_cloudflare_api_token = %s\n' "$CF_TOKEN" >/etc/letsencrypt/cloudflare-x7.ini
-  chmod 600 /etc/letsencrypt/cloudflare-x7.ini
-  certbot certonly --non-interactive --agree-tos --email "$EMAIL" --dns-cloudflare --dns-cloudflare-credentials /etc/letsencrypt/cloudflare-x7.ini -d "$DOMAIN" && TLS=1 || true
- else
-  certbot certonly --webroot -w /var/www/html --non-interactive --agree-tos --email "$EMAIL" -d "$DOMAIN" && TLS=1 || true
- fi
- if [[ $TLS == 1 ]]; then
-  cat >/etc/nginx/sites-available/x7-panel-9444 <<'X7_NGINX_EOF'
-server {
- listen __X7_PORT__ ssl;
- server_name __X7_DOMAIN__;
- ssl_certificate /etc/letsencrypt/live/__X7_DOMAIN__/fullchain.pem;
- ssl_certificate_key /etc/letsencrypt/live/__X7_DOMAIN__/privkey.pem;
- ssl_protocols TLSv1.2 TLSv1.3;
- add_header X-Frame-Options DENY always;
- add_header X-Content-Type-Options nosniff always;
- location = /__X7_SECRET__ { return 301 /__X7_SECRET__/; }
- location ^~ /__X7_SECRET__/ {
-  proxy_pass http://127.0.0.1:8787/;
-  proxy_set_header Host $host;
-  proxy_set_header X-Real-IP $remote_addr;
-  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-  proxy_set_header X-Forwarded-Proto https;
- }
- location / { return 404; }
-}
-X7_NGINX_EOF
-  sed -i -e "s/__X7_PORT__/$PANEL_PORT/g" -e "s/__X7_DOMAIN__/$DOMAIN/g" -e "s/__X7_SECRET__/$PATH_SECRET/g" /etc/nginx/sites-available/x7-panel-9444
-  ln -sfn /etc/nginx/sites-available/x7-panel-9444 /etc/nginx/sites-enabled/x7-panel-9444
-  nginx -t && systemctl enable --now nginx && systemctl reload nginx
- else
-  echo "[X7] SSL not issued. X7 remains SSH-only; check DNS/HTTP-01 reachability or Cloudflare token, then rerun installer."
- fi
-fi
-unset CF_TOKEN
-say "X7 Panel install/update finished."
-if [[ $TLS == 1 ]]; then echo "Panel: https://$DOMAIN:$PANEL_PORT/$PATH_SECRET/"; else echo "Panel: SSH-only at 127.0.0.1:8787"; echo "SSH: ssh -L 8787:127.0.0.1:8787 root@YOUR_SERVER_IP"; fi
-echo "Admin username: $ADMIN_USER"
-echo "WireGuard endpoint: $ENDPOINT:$WG_PORT"
-echo "WireGuard public key: ${PUB:-$(wg show wg0 public-key 2>/dev/null || true)}"
-echo "Update: curl -fsSL $BASE/install.sh | sudo bash"
-echo "Remove: curl -fsSL $BASE/uninstall.sh | sudo bash"
-echo "Open TCP $PANEL_PORT and UDP $WG_PORT at your VPS firewall. (TCP 80 is only needed for HTTP-01 certificate issuance.)"
- /etc/wireguard/wg0.conf; then
-    cp -a /etc/wireguard/wg0.conf /etc/wireguard/x7wg0.conf
-    sed -i -e 's/^Address *= *.*/Address = 10.78.0.1\/24/' -e 's/^ListenPort *= *.*/ListenPort = 51821/' -e 's/10\.77\.0\./10.78.0./g' /etc/wireguard/x7wg0.conf
-    chmod 600 /etc/wireguard/x7wg0.conf
-    if [[ -f "$DB/panel.db" ]]; then
-      python3 - "$DB/panel.db" <<'PYMIGRATE'
-import sqlite3,sys
-c=sqlite3.connect(sys.argv[1])
-try:
- c.execute("UPDATE peers SET address=replace(address, '10.77.0.', '10.78.0.') WHERE address LIKE '10.77.0.%'")
- c.commit()
-except sqlite3.OperationalError:
- pass
-finally:
- c.close()
-PYMIGRATE
-    fi
-    systemctl disable --now wg-quick@wg0 >/dev/null 2>&1 || true
-    echo "[X7] Previous X7 interface migrated to x7wg0; Hunter DNS files were left unchanged."
-  else
-    die "Found wg0.conf but it does not match the previous X7 config. Refusing to touch it."
-  fi
-fi
-say "Downloading latest X7 application"
-for f in main.py index.html __init__.py requirements.txt; do curl -fLsS "$BASE/app/$f" -o "$APP/$f"; done
-python3 -m venv "$APP/venv"
-"$APP/venv/bin/pip" install --disable-pip-version-check -q -r "$APP/requirements.txt"
-if [[ $UPDATE == 0 ]]; then
- WAN="$(ip -4 route show default | awk 'NR==1{print $5}')"; [[ -n "$WAN" ]] || die "Cannot detect network interface."
- PRIV="$(wg genkey)"; PUB="$(printf '%s' "$PRIV" | wg pubkey)"
- cat >/etc/wireguard/wg0.conf <<EOF
-[Interface]
-Address = 10.77.0.1/24
-ListenPort = $WG_PORT
-PrivateKey = $PRIV
-PostUp = iptables -A FORWARD -i %i -j ACCEPT; iptables -A FORWARD -o %i -j ACCEPT; iptables -t nat -A POSTROUTING -o $WAN -j MASQUERADE
-PostDown = iptables -D FORWARD -i %i -j ACCEPT; iptables -D FORWARD -o %i -j ACCEPT; iptables -t nat -D POSTROUTING -o $WAN -j MASQUERADE
-EOF
- chmod 600 /etc/wireguard/wg0.conf
- HASH="$(ADMIN_PASS="$ADMIN_PASS" python3 - <<'PY'
-import hashlib,os,secrets
-s=secrets.token_bytes(16)
-print(s.hex()+"$"+hashlib.pbkdf2_hmac("sha256",os.environ["ADMIN_PASS"].encode(),s,310000).hex())
-PY
-)"
-else
- PUB="$(wg show wg0 public-key 2>/dev/null || true)"
- if [[ -n "$ADMIN_PASS" ]]; then
-  HASH="$(ADMIN_PASS="$ADMIN_PASS" python3 - <<'PY'
-import hashlib,os,secrets
-s=secrets.token_bytes(16)
-print(s.hex()+"$"+hashlib.pbkdf2_hmac("sha256",os.environ["ADMIN_PASS"].encode(),s,310000).hex())
-PY
-)"
- fi
-fi
-unset ADMIN_PASS PASS2
-TMP="$(mktemp)"
-if [[ $UPDATE == 1 ]]; then grep -v '^X7_' "$ENV" >"$TMP" || true; fi
-{
- echo "X7_DB=$DB/panel.db"
- echo "X7_INTERFACE=wg0"
- echo "X7_WG_PORT=$WG_PORT"
- echo "X7_ENDPOINT=$ENDPOINT"
- echo "X7_SERVER_ADDRESS=10.77.0.1/24"
- echo "X7_MODE=standalone"
- echo "X7_PANEL_PORT=$PANEL_PORT"
- echo "X7_PATH_SECRET=$PATH_SECRET"
- echo "X7_ADMIN_USER=$ADMIN_USER"
- echo "X7_ADMIN_PASSWORD_HASH=$HASH"
- [[ -n "$DOMAIN" ]] && echo "X7_DOMAIN=$DOMAIN" || true
-} >>"$TMP"
-install -m 600 "$TMP" "$ENV"; rm -f "$TMP"
-cat >/etc/systemd/system/x7-panel.service <<'EOF'
-[Unit]
-Description=X7 Panel
-After=network-online.target wg-quick@wg0.service
-Wants=network-online.target
-[Service]
-Type=simple
-User=root
-WorkingDirectory=/opt/x7-panel
-EnvironmentFile=/etc/x7-panel.env
-ExecStart=/opt/x7-panel/venv/bin/uvicorn main:app --app-dir /opt/x7-panel --host 127.0.0.1 --port 8787
-Restart=on-failure
-RestartSec=3
-NoNewPrivileges=true
-PrivateTmp=true
-ProtectHome=true
-ProtectSystem=full
-ReadWritePaths=/var/lib/x7-panel /etc/wireguard
-[Install]
-WantedBy=multi-user.target
-EOF
-systemctl daemon-reload
-systemctl enable --now wg-quick@wg0
-systemctl enable --now x7-panel
-systemctl restart x7-panel
-TLS=0
-if [[ -n "$DOMAIN" ]]; then
- if [[ -s "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" && -s "/etc/letsencrypt/live/$DOMAIN/privkey.pem" ]]; then
-  TLS=1
- elif ! getent ahostsv4 "$DOMAIN" >/dev/null; then
-  echo "[X7] DNS does not resolve yet."
- elif [[ -n "$CF_TOKEN" ]] && dpkg -s python3-certbot-dns-cloudflare >/dev/null 2>&1; then
-  install -d -m 700 /etc/letsencrypt
-  printf 'dns_cloudflare_api_token = %s\n' "$CF_TOKEN" >/etc/letsencrypt/cloudflare-x7.ini
-  chmod 600 /etc/letsencrypt/cloudflare-x7.ini
-  certbot certonly --non-interactive --agree-tos --email "$EMAIL" --dns-cloudflare --dns-cloudflare-credentials /etc/letsencrypt/cloudflare-x7.ini -d "$DOMAIN" && TLS=1 || true
- else
-  certbot certonly --webroot -w /var/www/html --non-interactive --agree-tos --email "$EMAIL" -d "$DOMAIN" && TLS=1 || true
- fi
- if [[ $TLS == 1 ]]; then
-  cat >/etc/nginx/sites-available/x7-panel-9444 <<'X7_NGINX_EOF'
-server {
- listen __X7_PORT__ ssl;
- server_name __X7_DOMAIN__;
- ssl_certificate /etc/letsencrypt/live/__X7_DOMAIN__/fullchain.pem;
- ssl_certificate_key /etc/letsencrypt/live/__X7_DOMAIN__/privkey.pem;
- ssl_protocols TLSv1.2 TLSv1.3;
- add_header X-Frame-Options DENY always;
- add_header X-Content-Type-Options nosniff always;
- location = /__X7_SECRET__ { return 301 /__X7_SECRET__/; }
- location ^~ /__X7_SECRET__/ {
-  proxy_pass http://127.0.0.1:8787/;
-  proxy_set_header Host $host;
-  proxy_set_header X-Real-IP $remote_addr;
-  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-  proxy_set_header X-Forwarded-Proto https;
- }
- location / { return 404; }
-}
-X7_NGINX_EOF
-  sed -i -e "s/__X7_PORT__/$PANEL_PORT/g" -e "s/__X7_DOMAIN__/$DOMAIN/g" -e "s/__X7_SECRET__/$PATH_SECRET/g" /etc/nginx/sites-available/x7-panel-9444
-  ln -sfn /etc/nginx/sites-available/x7-panel-9444 /etc/nginx/sites-enabled/x7-panel-9444
-  nginx -t && systemctl enable --now nginx && systemctl reload nginx
- else
-  echo "[X7] SSL not issued. X7 remains SSH-only; check DNS/HTTP-01 reachability or Cloudflare token, then rerun installer."
- fi
-fi
-unset CF_TOKEN
-say "X7 Panel install/update finished."
-if [[ $TLS == 1 ]]; then echo "Panel: https://$DOMAIN:$PANEL_PORT/$PATH_SECRET/"; else echo "Panel: SSH-only at 127.0.0.1:8787"; echo "SSH: ssh -L 8787:127.0.0.1:8787 root@YOUR_SERVER_IP"; fi
-echo "Admin username: $ADMIN_USER"
-echo "WireGuard endpoint: $ENDPOINT:$WG_PORT"
-echo "WireGuard public key: ${PUB:-$(wg show wg0 public-key 2>/dev/null || true)}"
 echo "Update: curl -fsSL $BASE/install.sh | sudo bash"
 echo "Remove: curl -fsSL $BASE/uninstall.sh | sudo bash"
 echo "Open TCP $PANEL_PORT and UDP $WG_PORT at your VPS firewall. (TCP 80 is only needed for HTTP-01 certificate issuance.)"
