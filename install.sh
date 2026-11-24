@@ -146,7 +146,7 @@ if [[ -n "$DOMAIN" ]]; then
   echo "[X7] DNS does not resolve yet."
  elif [[ -n "$CF_TOKEN" ]] && dpkg -s python3-certbot-dns-cloudflare >/dev/null 2>&1; then
   install -d -m 700 /etc/letsencrypt
-  printf 'dns_cloudflare_api_token = %s\\n' "$CF_TOKEN" >/etc/letsencrypt/cloudflare-x7.ini
+  printf 'dns_cloudflare_api_token = %s\n' "$CF_TOKEN" >/etc/letsencrypt/cloudflare-x7.ini
   chmod 600 /etc/letsencrypt/cloudflare-x7.ini
   certbot certonly --non-interactive --agree-tos --email "$EMAIL" --dns-cloudflare --dns-cloudflare-credentials /etc/letsencrypt/cloudflare-x7.ini -d "$DOMAIN" && TLS=1 || true
  else
@@ -165,9 +165,9 @@ server {
  location = /$PATH_SECRET { return 301 /$PATH_SECRET/; }
  location ^~ /$PATH_SECRET/ {
   proxy_pass http://127.0.0.1:8787/;
-  proxy_set_header Host \\$host;
-  proxy_set_header X-Real-IP \\$remote_addr;
-  proxy_set_header X-Forwarded-For \\$proxy_add_x_forwarded_for;
+  proxy_set_header Host \$host;
+  proxy_set_header X-Real-IP \$remote_addr;
+  proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
   proxy_set_header X-Forwarded-Proto https;
  }
  location / { return 404; }
