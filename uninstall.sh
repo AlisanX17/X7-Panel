@@ -11,13 +11,13 @@ if command -v nginx >/dev/null 2>&1; then nginx -t && systemctl reload nginx || 
 rm -rf /opt/x7-panel
 rm -f /etc/x7-panel.env /root/x7-panel-credentials.txt
 if [[ "$REMOVE_WG" =~ ^[Yy]$ ]]; then
-  systemctl disable --now wg-quick@wg0 2>/dev/null || true
-  rm -f /etc/wireguard/wg0.conf /etc/sysctl.d/99-x7-panel.conf
+  systemctl disable --now wg-quick@x7wg0 2>/dev/null || true
+  rm -f /etc/wireguard/x7wg0.conf /etc/sysctl.d/99-x7-panel.conf
   rm -rf /var/lib/x7-panel
   sysctl --system >/dev/null 2>&1 || true
   echo "WireGuard config and peer database removed."
 else
   echo "WireGuard server config and peer database were preserved."
-  echo "If you want to remove WireGuard later, remove /etc/wireguard/wg0.conf and stop wg-quick@wg0 yourself."
+  echo "If you want to remove WireGuard later, remove /etc/wireguard/x7wg0.conf and stop wg-quick@x7wg0 yourself."
 fi
 echo "X7 Panel has been uninstalled. Nginx, Certbot, and WireGuard packages were not removed because other services may use them."
