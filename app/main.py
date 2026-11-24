@@ -1,3 +1,6 @@
+import base64
+import hashlib
+import hmac
 import ipaddress
 import os
 import secrets
@@ -13,7 +16,8 @@ from pydantic import BaseModel, Field
 
 APP_DIR = Path(__file__).resolve().parent
 DB_PATH = Path(os.getenv("X7_DB", "/var/lib/x7-panel/panel.db"))
-ENV_TOKEN = os.getenv("X7_ADMIN_TOKEN", "")
+ADMIN_USER = os.getenv("X7_ADMIN_USER", "")
+PASSWORD_HASH = os.getenv("X7_ADMIN_PASSWORD_HASH", "")
 IFACE = os.getenv("X7_INTERFACE", "wg0")
 PORT = int(os.getenv("X7_WG_PORT", "51820"))
 SERVER_ENDPOINT = os.getenv("X7_ENDPOINT", "")
@@ -22,7 +26,7 @@ MODE = os.getenv("X7_MODE", "standalone")
 CLIENT_ALLOWED_IPS = os.getenv("X7_CLIENT_ALLOWED_IPS", "0.0.0.0/0")
 CONF = Path("/etc/wireguard") / f"{IFACE}.conf"
 
-app = FastAPI(title="X7 Panel", version="0.2.0", docs_url=None, redoc_url=None)
+app = FastAPI(title="X7 Panel", version="0.3.0", docs_url=None, redoc_url=None)
 
 
 def db():
@@ -41,9 +45,25 @@ def db():
     return conn
 
 
-def require_auth(token: Optional[str]):
-    if not ENV_TOKEN or not secrets.compare_digest(token or "", ENV_TOKEN):
-        raise HTTPException(status_code=401, detail="توکن مدیر نامعتبر است")
+def verify_password(password: str) -> bool:
+    try:
+        salt, expected = PASSWORD_HASH.split("$", 1)
+        actual = hashlib.pbkdf2_hmac("sha256", password.encode(), bytes.fromhex(salt), 310000).hex()
+        return hmac.compare_digest(actual, expected)
+    except (ValueError, TypeError):
+        return False
+
+
+def require_auth(authorization: Optional[str]):
+    if not authorization or not authorization.startswith("Basic "):
+        raise HTTPException(status_code=401, detail="ابتدا وارد پنل شوید")
+    try:
+        raw = base64.b64decode(authorization[6:], validate=True).decode("utf-8")
+        username, password = raw.split(":", 1)
+    except Exception:
+        raise HTTPException(status_code=401, detail="نام کاربری یا رمز عبور نادرست است")
+    if not ADMIN_USER or not hmac.compare_digest(username, ADMIN_USER) or not verify_password(password):
+        raise HTTPException(status_code=401, detail="نام کاربری یا رمز عبور نادرست است")
 
 
 def cmd(args, input_text=None, check=True):
@@ -51,7 +71,7 @@ def cmd(args, input_text=None, check=True):
         return subprocess.run(args, input=input_text, text=True, capture_output=True,
                               check=check, timeout=20)
     except FileNotFoundError:
-        raise HTTPException(503, "ابزار WireGuard نصب نیست؛ install.sh را اجرا کنید")
+        raise HTTPException(503, "ابزار WireGuard نصب نیست")
     except subprocess.TimeoutExpired:
         raise HTTPException(504, "فرمان سرور بیش از حد طول کشید")
     except subprocess.CalledProcessError as exc:
@@ -60,7 +80,7 @@ def cmd(args, input_text=None, check=True):
 
 def ensure_ready():
     if not CONF.exists():
-        raise HTTPException(503, f"اینترفیس {IFACE} آماده نیست. ابتدا نصب‌کننده را اجرا کنید.")
+        raise HTTPException(503, f"اینترفیس {IFACE} آماده نیست")
 
 
 def persist_peers():
@@ -91,6 +111,11 @@ def server_public_key():
     return result.stdout.strip() if result.returncode == 0 else ""
 
 
+class LoginInput(BaseModel):
+    username: str = Field(min_length=1, max_length=64)
+    password: str = Field(min_length=1, max_length=256)
+
+
 class PeerCreate(BaseModel):
     name: str = Field(min_length=2, max_length=32, pattern=r"^[A-Za-z0-9_-]+$")
     address: str
@@ -101,20 +126,27 @@ def index():
     return HTMLResponse((APP_DIR / "index.html").read_text(encoding="utf-8"))
 
 
+@app.post("/api/login")
+def login(data: LoginInput):
+    if (not ADMIN_USER or not hmac.compare_digest(data.username, ADMIN_USER)
+            or not verify_password(data.password)):
+        raise HTTPException(status_code=401, detail="نام کاربری یا رمز عبور نادرست است")
+    return {"ok": True}
+
+
 @app.get("/api/status")
-def status(x_x7_token: Optional[str] = Header(default=None)):
-    require_auth(x_x7_token)
+def status(authorization: Optional[str] = Header(default=None)):
+    require_auth(authorization)
     ensure_ready()
     show = cmd(["wg", "show", IFACE], check=False)
     return {"mode": MODE, "interface": IFACE, "listen_port": PORT,
-            "active": show.returncode == 0,
-            "public_key": server_public_key(),
+            "active": show.returncode == 0, "public_key": server_public_key(),
             "endpoint_configured": bool(SERVER_ENDPOINT)}
 
 
 @app.get("/api/peers")
-def list_peers(x_x7_token: Optional[str] = Header(default=None)):
-    require_auth(x_x7_token)
+def list_peers(authorization: Optional[str] = Header(default=None)):
+    require_auth(authorization)
     conn = db()
     rows = conn.execute("SELECT id,name,public_key,address,created_at FROM peers ORDER BY id DESC").fetchall()
     conn.close()
@@ -133,21 +165,17 @@ def list_peers(x_x7_token: Optional[str] = Header(default=None)):
 
 def build_client_config(private_key: str, address: str):
     if not SERVER_ENDPOINT:
-        raise HTTPException(409, "آدرس عمومی سرور در X7_ENDPOINT تنظیم نشده است")
-    return ("[Interface]\n"
-            f"PrivateKey = {private_key}\n"
-            f"Address = {address}/32\n"
-            f"DNS = {DNS}\n\n"
-            "[Peer]\n"
-            f"PublicKey = {server_public_key()}\n"
+        raise HTTPException(409, "آدرس عمومی سرور تنظیم نشده است")
+    return ("[Interface]\n" f"PrivateKey = {private_key}\n"
+            f"Address = {address}/32\n" f"DNS = {DNS}\n\n"
+            "[Peer]\n" f"PublicKey = {server_public_key()}\n"
             f"Endpoint = {SERVER_ENDPOINT}:{PORT}\n"
-            f"AllowedIPs = {CLIENT_ALLOWED_IPS}\n"
-            "PersistentKeepalive = 25\n")
+            f"AllowedIPs = {CLIENT_ALLOWED_IPS}\n" "PersistentKeepalive = 25\n")
 
 
 @app.post("/api/peers")
-def create_peer(peer: PeerCreate, x_x7_token: Optional[str] = Header(default=None)):
-    require_auth(x_x7_token)
+def create_peer(peer: PeerCreate, authorization: Optional[str] = Header(default=None)):
+    require_auth(authorization)
     ensure_ready()
     try:
         iface = ipaddress.ip_interface(peer.address)
@@ -156,11 +184,10 @@ def create_peer(peer: PeerCreate, x_x7_token: Optional[str] = Header(default=Non
     except ValueError:
         raise HTTPException(400, "آدرس باید IPv4 با پسوند /32 باشد؛ مثل 10.77.0.2/32")
     if not SERVER_ENDPOINT:
-        raise HTTPException(409, "ابتدا X7_ENDPOINT را تنظیم کنید")
+        raise HTTPException(409, "آدرس عمومی سرور تنظیم نشده است")
     conn = db()
-    exists = conn.execute("SELECT 1 FROM peers WHERE name=? OR address=?",
-                          (peer.name, str(iface))).fetchone()
-    if exists:
+    if conn.execute("SELECT 1 FROM peers WHERE name=? OR address=?",
+                    (peer.name, str(iface))).fetchone():
         conn.close()
         raise HTTPException(409, "نام یا آدرس این کاربر تکراری است")
     private = cmd(["wg", "genkey"]).stdout.strip()
@@ -187,8 +214,8 @@ def create_peer(peer: PeerCreate, x_x7_token: Optional[str] = Header(default=Non
 
 
 @app.get("/api/peers/{peer_id}/config")
-def get_peer_config(peer_id: int, x_x7_token: Optional[str] = Header(default=None)):
-    require_auth(x_x7_token)
+def get_peer_config(peer_id: int, authorization: Optional[str] = Header(default=None)):
+    require_auth(authorization)
     conn = db()
     row = conn.execute("SELECT name,address,private_key FROM peers WHERE id=?", (peer_id,)).fetchone()
     conn.close()
@@ -199,8 +226,8 @@ def get_peer_config(peer_id: int, x_x7_token: Optional[str] = Header(default=Non
 
 
 @app.get("/api/peers/{peer_id}/qr")
-def peer_qr(peer_id: int, x_x7_token: Optional[str] = Header(default=None)):
-    require_auth(x_x7_token)
+def peer_qr(peer_id: int, authorization: Optional[str] = Header(default=None)):
+    require_auth(authorization)
     conn = db()
     row = conn.execute("SELECT address,private_key FROM peers WHERE id=?", (peer_id,)).fetchone()
     conn.close()
@@ -215,8 +242,8 @@ def peer_qr(peer_id: int, x_x7_token: Optional[str] = Header(default=None)):
 
 
 @app.delete("/api/peers/{peer_id}")
-def delete_peer(peer_id: int, x_x7_token: Optional[str] = Header(default=None)):
-    require_auth(x_x7_token)
+def delete_peer(peer_id: int, authorization: Optional[str] = Header(default=None)):
+    require_auth(authorization)
     conn = db()
     row = conn.execute("SELECT public_key FROM peers WHERE id=?", (peer_id,)).fetchone()
     if not row:
