@@ -18,15 +18,15 @@ APP_DIR = Path(__file__).resolve().parent
 DB_PATH = Path(os.getenv("X7_DB", "/var/lib/x7-panel/panel.db"))
 ADMIN_USER = os.getenv("X7_ADMIN_USER", "")
 PASSWORD_HASH = os.getenv("X7_ADMIN_PASSWORD_HASH", "")
-IFACE = os.getenv("X7_INTERFACE", "wg0")
-PORT = int(os.getenv("X7_WG_PORT", "51820"))
+IFACE = os.getenv("X7_INTERFACE", "x7wg0")
+PORT = int(os.getenv("X7_WG_PORT", "51821"))
 SERVER_ENDPOINT = os.getenv("X7_ENDPOINT", "")
 DNS = os.getenv("X7_DNS", "1.1.1.1")
 MODE = os.getenv("X7_MODE", "standalone")
 CLIENT_ALLOWED_IPS = os.getenv("X7_CLIENT_ALLOWED_IPS", "0.0.0.0/0")
 CONF = Path("/etc/wireguard") / f"{IFACE}.conf"
 
-app = FastAPI(title="X7 Panel", version="0.3.0", docs_url=None, redoc_url=None)
+app = FastAPI(title="X7 Panel", version="0.5.0", docs_url=None, redoc_url=None)
 
 
 def db():
@@ -122,13 +122,13 @@ class PeerCreate(BaseModel):
 
 
 def allocate_peer_address(conn):
-    raw = os.getenv("X7_SERVER_ADDRESS", "10.77.0.1/24")
+    raw = os.getenv("X7_SERVER_ADDRESS", "10.78.0.1/24")
     try:
         server_iface = ipaddress.ip_interface(raw)
         network = server_iface.network
     except ValueError:
-        network = ipaddress.ip_network("10.77.0.0/24")
-        server_iface = ipaddress.ip_interface("10.77.0.1/24")
+        network = ipaddress.ip_network("10.78.0.0/24")
+        server_iface = ipaddress.ip_interface("10.78.0.1/24")
     used = {str(server_iface.ip)}
     used.update(r[0].split("/")[0] for r in conn.execute("SELECT address FROM peers"))
     # Keep automatic allocation in the first 4096 host addresses.
