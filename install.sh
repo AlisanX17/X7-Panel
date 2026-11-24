@@ -153,26 +153,27 @@ if [[ -n "$DOMAIN" ]]; then
   certbot certonly --webroot -w /var/www/html --non-interactive --agree-tos --email "$EMAIL" -d "$DOMAIN" && TLS=1 || true
  fi
  if [[ $TLS == 1 ]]; then
-  cat >/etc/nginx/sites-available/x7-panel-9444 <<EOF
+  cat >/etc/nginx/sites-available/x7-panel-9444 <<'X7_NGINX_EOF'
 server {
- listen ${PANEL_PORT} ssl;
- server_name $DOMAIN;
- ssl_certificate /etc/letsencrypt/live/$DOMAIN/fullchain.pem;
- ssl_certificate_key /etc/letsencrypt/live/$DOMAIN/privkey.pem;
+ listen __X7_PORT__ ssl;
+ server_name __X7_DOMAIN__;
+ ssl_certificate /etc/letsencrypt/live/__X7_DOMAIN__/fullchain.pem;
+ ssl_certificate_key /etc/letsencrypt/live/__X7_DOMAIN__/privkey.pem;
  ssl_protocols TLSv1.2 TLSv1.3;
  add_header X-Frame-Options DENY always;
  add_header X-Content-Type-Options nosniff always;
- location = /$PATH_SECRET { return 301 /$PATH_SECRET/; }
- location ^~ /$PATH_SECRET/ {
+ location = /__X7_SECRET__ { return 301 /__X7_SECRET__/; }
+ location ^~ /__X7_SECRET__/ {
   proxy_pass http://127.0.0.1:8787/;
-  proxy_set_header Host \$host;
-  proxy_set_header X-Real-IP \$remote_addr;
-  proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+  proxy_set_header Host $host;
+  proxy_set_header X-Real-IP $remote_addr;
+  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
   proxy_set_header X-Forwarded-Proto https;
  }
  location / { return 404; }
 }
-EOF
+X7_NGINX_EOF
+  sed -i -e "s/__X7_PORT__/$PANEL_PORT/g" -e "s/__X7_DOMAIN__/$DOMAIN/g" -e "s/__X7_SECRET__/$PATH_SECRET/g" /etc/nginx/sites-available/x7-panel-9444
   ln -sfn /etc/nginx/sites-available/x7-panel-9444 /etc/nginx/sites-enabled/x7-panel-9444
   nginx -t && systemctl enable --now nginx && systemctl reload nginx
  else
