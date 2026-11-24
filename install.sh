@@ -140,7 +140,9 @@ systemctl enable --now x7-panel
 systemctl restart x7-panel
 TLS=0
 if [[ -n "$DOMAIN" ]]; then
- if ! getent ahostsv4 "$DOMAIN" >/dev/null; then
+ if [[ -s "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" && -s "/etc/letsencrypt/live/$DOMAIN/privkey.pem" ]]; then
+  TLS=1
+ elif ! getent ahostsv4 "$DOMAIN" >/dev/null; then
   echo "[X7] DNS does not resolve yet."
  elif [[ -n "$CF_TOKEN" ]] && dpkg -s python3-certbot-dns-cloudflare >/dev/null 2>&1; then
   install -d -m 700 /etc/letsencrypt
