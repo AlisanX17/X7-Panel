@@ -31,7 +31,8 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update
 apt-get install -y nginx certbot python3-certbot-nginx python3 python3-venv python3-pip wireguard-tools qrencode iptables iproute2
 install -d -m 700 /opt/x7-panel /var/lib/x7-panel
-cp -a app /opt/x7-panel/
+rm -rf /opt/x7-panel/app
+cp -a app /opt/x7-panel/app
 if [[ ! -x /opt/x7-panel/venv/bin/python ]]; then python3 -m venv /opt/x7-panel/venv; fi
 /opt/x7-panel/venv/bin/pip install --disable-pip-version-check -r /opt/x7-panel/app/requirements.txt
 
