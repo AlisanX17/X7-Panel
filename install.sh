@@ -64,7 +64,30 @@ apt-get install -y -qq curl ca-certificates python3 python3-venv python3-pip wir
 if [[ -n "$CF_TOKEN" ]]; then apt-get install -y -qq python3-certbot-dns-cloudflare || true; fi
 install -d -m 700 "$APP" "$DB" /etc/wireguard
 # Migrate the previous X7-owned wg0 interface to a dedicated name; do not alter Hunter DNS.
-if [[ -f /etc/wireguard/wg0.conf && ! -f /etc/wireguard/x7wg0.conf ]] && grep -q '^X7_INTERFACE=wg0
+if [[ -f /etc/wireguard/wg0.conf && ! -f /etc/wireguard/x7wg0.conf ]] && grep -q '^X7_INTERFACE=wg0$' "$ENV"; then
+  if grep -q '^Address *= *10\.77\.0\.1/24$' /etc/wireguard/wg0.conf; then
+    cp -a /etc/wireguard/wg0.conf /etc/wireguard/x7wg0.conf
+    sed -i -e 's/^Address *= *.*/Address = 10.78.0.1\/24/' -e 's/^ListenPort *= *.*/ListenPort = 51821/' -e 's/10\.77\.0\./10.78.0./g' /etc/wireguard/x7wg0.conf
+    chmod 600 /etc/wireguard/x7wg0.conf
+    if [[ -f "$DB/panel.db" ]]; then
+      python3 - "$DB/panel.db" <<'PYMIGRATE'
+import sqlite3,sys
+c=sqlite3.connect(sys.argv[1])
+try:
+ c.execute("UPDATE peers SET address=replace(address, '10.77.0.', '10.78.0.') WHERE address LIKE '10.77.0.%'")
+ c.commit()
+except sqlite3.OperationalError:
+ pass
+finally:
+ c.close()
+PYMIGRATE
+    fi
+    systemctl disable --now wg-quick@wg0 >/dev/null 2>&1 || true
+    echo "[X7] Previous X7 interface migrated to x7wg0; Hunter DNS files were left unchanged."
+  else
+    die "Found wg0.conf but it does not match the previous X7 config. Refusing to touch it."
+  fi
+fi
 say "Downloading latest X7 application"
 for f in main.py index.html __init__.py requirements.txt; do curl -fLsS "$BASE/app/$f" -o "$APP/$f"; done
 python3 -m venv "$APP/venv"
